@@ -10,6 +10,24 @@ glm::vec2 BoundedAreaRule::computeForce(const std::vector<BoidView>& neighborhoo
 
   // begin solution
 
+  
+
+  // check if the x is larger than the display size x - the distance to stay away from
+  if (boid.position.x > (displaySize.x - desiredDistance)) force.x += (displaySize.x - desiredDistance) - boid.position.x;
+
+  // check if the x is smaller than 0 + the distance to stay away from
+  if (boid.position.x < desiredDistance) force.x += desiredDistance - boid.position.x;
+
+  // check if the y is larger than the display size y - the distance to stay away from
+  if (boid.position.y > (displaySize.y - desiredDistance)) force.y += (displaySize.y - desiredDistance) - boid.position.y;
+
+  // check if the y is smaller than 0 + the distance to stay away from
+  if (boid.position.y < desiredDistance) force.y += desiredDistance - boid.position.y;
+
+  // depending on size of neighborhood apply more force (include self)
+
+  force *= neighborhood.size() + 1;
+
   // end solution
 
   return force;

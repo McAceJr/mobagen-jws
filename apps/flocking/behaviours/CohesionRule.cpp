@@ -9,6 +9,27 @@ glm::vec2 CohesionRule::computeForce(const std::vector<BoidView>& neighborhood, 
 
   // begin solution
 
+  
+  // if there are no neighbors return no force.
+  if (neighborhood.size() == 0) return cohesionForce;
+
+  // create an average position
+  glm::vec2 avg(0.f);
+
+  // add the position of all neighbors to the average position
+  for (auto n : neighborhood)
+  {
+    avg += n.position;
+  }
+  
+  // devide the average position by the amount of neighbors
+  avg /= neighborhood.size();
+
+  // if the length of the vector from the boids position to the average position is closeto 0 then return an empty force
+  if (glm::length(avg - boid.position) <= 0.0001f) return cohesionForce;
+
+  // set the force to the normalized vector from the boids position to the average position.
+  cohesionForce = glm::normalize(avg - boid.position);
 
   // end solution
 

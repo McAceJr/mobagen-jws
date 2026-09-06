@@ -10,6 +10,30 @@ glm::vec2 MouseInfluenceRule::computeForce(const std::vector<BoidView>& neighbor
 
   // begin solution
 
+  if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+  {
+    // mosue position vector
+    glm::vec2 mouse(ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y);
+    // direction from boid to mouse
+    glm::vec2 dir = boid.position - mouse;
+
+    // get the length and normalized direction vector
+    float dist = glm::length(dir);
+    dir = glm::normalize(dir);
+    
+    // if length is close to 0 return no force
+    if (dist <= 0.0001f) return force;
+
+    // force is the direction and the magnitude becomes larger the closer the object is to the mouse.
+    force = (dir * (1 / dist)) * this->weight;
+
+    // scale with neighborhood size (self inclusive)
+    force *= neighborhood.size() + 1;
+
+    // invert the force is it is not repulsive.
+    if (!isRepulsive) force = -force;
+  }
+
   // end solution
 
   return force;

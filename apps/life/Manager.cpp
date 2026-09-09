@@ -6,8 +6,8 @@
 
 Manager::Manager() {
   world.Resize(sideSize);
-  rules.push_back(new HexagonGameOfLife());
   rules.push_back(new JohnConway());
+  rules.push_back(new HexagonGameOfLife());
 }
 
 void Manager::Start() {}

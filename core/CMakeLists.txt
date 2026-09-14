@@ -2,46 +2,52 @@ set(BUILD_SHARED_LIBS FALSE)
 
 # ---------------------------------------------------------------------------
 # SDL3 target selection Android needs the shared variant (loaded by SDLActivity via JNI). All other
-# platforms use the static variant.
+# platforms use the static variant. Foundation-only builds never configure SDL3.
 # ---------------------------------------------------------------------------
-if(ANDROID)
-  set(_CORE_SDL_TARGET SDL3::SDL3-shared)
-else()
-  set(_CORE_SDL_TARGET SDL3::SDL3-static)
+if(MOBAGEN_BUILD_RUNTIME)
+  if(ANDROID)
+    set(_CORE_SDL_TARGET SDL3::SDL3-shared)
+  else()
+    set(_CORE_SDL_TARGET SDL3::SDL3-static)
+  endif()
+
+  # -------------------------------------------------------------------------
+  # RmlUi — collect optional libraries if the target is available
+  # -------------------------------------------------------------------------
+  set(RMLUI_LIBS "")
+  if(TARGET rmlui_all)
+    list(APPEND RMLUI_LIBS rmlui_all)
+    message(STATUS "RmlUi linked to core")
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
-# RmlUi — collect optional libraries if the target is available
+# DOD subsystems (each defines their own mobagen::core_* target)
 # ---------------------------------------------------------------------------
-set(RMLUI_LIBS "")
-if(TARGET rmlui_all)
-  list(APPEND RMLUI_LIBS rmlui_all)
-  message(STATUS "RmlUi linked to core")
-endif()
-
-# ---------------------------------------------------------------------------
-# 10 DOD subsystems (each defines their own mobagen::core_* target)
-# ---------------------------------------------------------------------------
+add_subdirectory(sources/threading)
 add_subdirectory(sources/ecs)
 add_subdirectory(sources/jobs)
 add_subdirectory(sources/reactive)
 add_subdirectory(sources/messaging)
+add_subdirectory(sources/modules)
 add_subdirectory(sources/scene)
 add_subdirectory(sources/camera)
 add_subdirectory(sources/input)
-add_subdirectory(sources/render)
 add_subdirectory(sources/resource)
+add_subdirectory(sources/serialization)
+add_subdirectory(sources/render)
 add_subdirectory(sources/net)
-# app host — WebGPU context + SDL3 callback host (umbrella wiring comes in a later todo)
-add_subdirectory(sources/app)
-# imgui GUI layer for the app host (ImGui SDL3 + WebGPU backends)
-add_subdirectory(sources/imgui)
-# rmlui GUI layer for the app host (RmlUi bridged through ImGui's WebGPU pipeline);
-# optional — only when the RmlUi targets were configured, mirroring the
-# RMLUI_LIBS guard above so non-rmlui builds never see it.
-if(TARGET rmlui_all)
-  add_subdirectory(sources/rmlui)
-  list(APPEND RMLUI_LIBS mobagen::core_rmlui)
+if(MOBAGEN_BUILD_RUNTIME)
+  # app host — WebGPU context + SDL3 callback host
+  add_subdirectory(sources/app)
+  # imgui GUI layer for the app host (ImGui SDL3 + WebGPU backends)
+  add_subdirectory(sources/imgui)
+  # rmlui GUI layer for the app host (RmlUi bridged through ImGui's WebGPU pipeline); optional —
+  # only when the RmlUi targets were configured.
+  if(TARGET rmlui_all)
+    add_subdirectory(sources/rmlui)
+    list(APPEND RMLUI_LIBS mobagen::core_rmlui)
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -81,24 +87,32 @@ add_library(mobagen::core ALIAS core)
 
 target_link_libraries(
   core
-  INTERFACE mobagen::core_ecs
+  INTERFACE mobagen::core_threading
+            mobagen::core_ecs
             mobagen::core_jobs
             mobagen::core_reactive
             mobagen::core_messaging
+            mobagen::core_modules
             mobagen::core_scene
             mobagen::core_camera
             mobagen::core_input
             mobagen::core_render
             mobagen::core_resource
             mobagen::core_net
-            mobagen::core_app
-            mobagen::core_imgui
-            ${_CORE_SDL_TARGET}
-            SDL3_image::SDL3_image-static
-            IMGUI
-            dawn::webgpu
-            ${RMLUI_LIBS}
 )
+
+if(MOBAGEN_BUILD_RUNTIME)
+  target_link_libraries(
+    core
+    INTERFACE mobagen::core_app
+              mobagen::core_imgui
+              ${_CORE_SDL_TARGET}
+              SDL3_image::SDL3_image-static
+              IMGUI
+              dawn::webgpu
+              ${RMLUI_LIBS}
+  )
+endif()
 
 target_include_directories(
   core INTERFACE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/sources

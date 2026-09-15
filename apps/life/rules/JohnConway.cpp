@@ -59,7 +59,7 @@ public:
     // todo: implement the reproduction condition
     // check if cell is dead
     if (!context.isAlive)
-    { // if there are 3 or 2 alive nighbors then revive
+    { // if there are 3 alive nighbors then revive
       if (context.aliveNeighbors == 3)
       {
         return true;

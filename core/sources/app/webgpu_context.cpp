@@ -48,11 +48,10 @@ namespace app {
 
     // Synchronous device request with device-lost / uncaptured-error logging
     // (flocking RequestDevice, including its SDL_Log wording).
-    wgpu::Device request_device(wgpu::Instance& instance, wgpu::Adapter& adapter, std::atomic<ContextState>* state) {
+    wgpu::Device request_device(wgpu::Instance& instance, wgpu::Adapter& adapter) {
       wgpu::DeviceDescriptor desc;
       desc.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous,
-                                 [state](const wgpu::Device&, wgpu::DeviceLostReason reason, wgpu::StringView msg) {
-                                   mark_context_lost(*state);
+                                 [](const wgpu::Device&, wgpu::DeviceLostReason reason, wgpu::StringView msg) {
                                    SDL_Log("WebGPU device lost (%d): %s", static_cast<int>(reason), msg.data);
                                  });
       desc.SetUncapturedErrorCallback([](const wgpu::Device&, wgpu::ErrorType type, wgpu::StringView msg) {
@@ -104,8 +103,7 @@ namespace app {
       r->done = true;
     }
 
-    void on_device_lost(WGPUDevice const*, WGPUDeviceLostReason reason, WGPUStringView msg, void* ud1, void*) {
-      mark_context_lost(*static_cast<std::atomic<ContextState>*>(ud1));
+    void on_device_lost(WGPUDevice const*, WGPUDeviceLostReason reason, WGPUStringView msg, void*, void*) {
       SDL_Log("WebGPU device lost (%d): %.*s", (int)reason, (int)msg.length, msg.data ? msg.data : "");
     }
 
@@ -199,13 +197,12 @@ namespace app {
   WebGPUContext::~WebGPUContext() { shutdown(); }
 
   bool WebGPUContext::init(const ContextDesc& desc) {
-    if (desc.want_surface && desc.window == nullptr) {
-      SDL_Log("WebGPUContext::init: want_surface requires a non-null window");
+    if (initialized_) {
+      SDL_Log("WebGPUContext::init: context is already initialized");
       return false;
     }
-    ContextState expected = ContextState::Uninitialized;
-    if (!state_.compare_exchange_strong(expected, ContextState::Initializing, std::memory_order_acq_rel, std::memory_order_acquire)) {
-      SDL_Log("WebGPUContext::init: context is already initialized");
+    if (desc.want_surface && desc.window == nullptr) {
+      SDL_Log("WebGPUContext::init: want_surface requires a non-null window");
       return false;
     }
 
@@ -219,17 +216,15 @@ namespace app {
     wgpu::Instance instance = wgpu::CreateInstance(&inst_desc);
     if (!instance) {
       SDL_Log("Failed to create WebGPU instance");
-      shutdown();
       return false;
     }
 
     wgpu::Adapter adapter = request_adapter(instance, desc);
     if (!adapter) {
-      shutdown();
       return false;  // instance + adapter clean themselves up
     }
 
-    device_ = request_device(instance, adapter, &state_).MoveToCHandle();
+    device_ = request_device(instance, adapter).MoveToCHandle();
     if (!device_) {
       shutdown();  // releases device_ if partially set; instance/adapter still own themselves
       return false;
@@ -248,7 +243,6 @@ namespace app {
     instance_ = wgpuCreateInstance(nullptr);
     if (!instance_) {
       SDL_Log("Failed to create WebGPU instance");
-      shutdown();
       return false;
     }
 
@@ -285,7 +279,6 @@ namespace app {
     d_desc.label = {"mobagen device", WGPU_STRLEN};
     d_desc.deviceLostCallbackInfo.mode = WGPUCallbackMode_AllowProcessEvents;
     d_desc.deviceLostCallbackInfo.callback = on_device_lost;
-    d_desc.deviceLostCallbackInfo.userdata1 = &state_;
     d_desc.uncapturedErrorCallbackInfo.callback = on_uncaptured_error;
     WGPURequestDeviceCallbackInfo d_cb = {};
     d_cb.mode = WGPUCallbackMode_AllowProcessEvents;
@@ -325,31 +318,18 @@ namespace app {
     surface_cfg_.alphaMode = WGPUCompositeAlphaMode_Auto;
     surface_cfg_.presentMode = WGPUPresentMode_Fifo;
 
-    expected = ContextState::Initializing;
-    if (!state_.compare_exchange_strong(expected, ContextState::Operational, std::memory_order_acq_rel, std::memory_order_acquire)) {
-      SDL_Log("WebGPU context became unavailable during initialization");
-      shutdown();
-      return false;
-    }
-
     if (surface_ != nullptr) {
       int w = 0, h = 0;
       SDL_GetWindowSizeInPixels(desc.window, &w, &h);
-      if (!configure_surface(w, h)) {
-        SDL_Log("Failed to configure WebGPU surface");
-        shutdown();
-        return false;
-      }
+      configure_surface(w, h);
     }
 
+    initialized_ = true;
     SDL_Log("WebGPU context ready (surfaceFormat=%d)", static_cast<int>(surface_format_));
     return true;
   }
 
   void WebGPUContext::shutdown() {
-    // Publish shutdown before releasing callback-owned objects. A late device-
-    // lost callback cannot change a completed shutdown back to Lost.
-    state_.store(ContextState::Uninitialized, std::memory_order_release);
     if (surface_ != nullptr) {
       if (surface_configured_) wgpuSurfaceUnconfigure(surface_);
       wgpuSurfaceRelease(surface_);
@@ -380,45 +360,43 @@ namespace app {
 #endif
     surface_format_ = WGPUTextureFormat_Undefined;
     surface_cfg_ = {};
+    initialized_ = false;
   }
 
   // ---------------------------------------------------------------------------
   // Frame surface flow
   // ---------------------------------------------------------------------------
-  bool WebGPUContext::configure_surface(int width, int height) {
-    if (!operational() || surface_ == nullptr || device_ == nullptr) return false;
-    if (width <= 0 || height <= 0) return false;
+  void WebGPUContext::configure_surface(int width, int height) {
+    if (surface_ == nullptr || device_ == nullptr) return;
+    if (width <= 0 || height <= 0) return;
     surface_cfg_.width = static_cast<std::uint32_t>(width);
     surface_cfg_.height = static_cast<std::uint32_t>(height);
     wgpuSurfaceConfigure(surface_, &surface_cfg_);
     surface_configured_ = true;
-    return operational();
   }
 
   WGPUSurfaceTexture WebGPUContext::acquire() {
     WGPUSurfaceTexture surface_texture = {};
-    if (!operational() || surface_ == nullptr || !surface_configured_) return surface_texture;
-    wgpuSurfaceGetCurrentTexture(surface_, &surface_texture);
-    if (surface_texture.status == WGPUSurfaceGetCurrentTextureStatus_Lost || surface_texture.status == WGPUSurfaceGetCurrentTextureStatus_Error) {
-      mark_context_lost(state_);
-    }
+    if (surface_ != nullptr) wgpuSurfaceGetCurrentTexture(surface_, &surface_texture);
     return surface_texture;
   }
 
-  bool WebGPUContext::present() {
-    if (!operational() || surface_ == nullptr || !surface_configured_) return false;
-    wgpuSurfacePresent(surface_);
-    return operational();
+  void WebGPUContext::present() {
+#ifdef __EMSCRIPTEN__
+    // emdawnwebgpu aborts on wgpuSurfacePresent (the browser composites the
+    // canvas itself after the submitted frame — pre-port apps skipped present
+    // under the same guard). Submit alone presents on web.
+#else
+    if (surface_ != nullptr) wgpuSurfacePresent(surface_);
+#endif
   }
 
-  bool WebGPUContext::tick() {
-    if (!operational()) return false;
+  void WebGPUContext::tick() {
 #ifdef __EMSCRIPTEN__
     if (instance_ != nullptr) wgpuInstanceProcessEvents(instance_);
 #else
     if (device_ != nullptr) wgpuDeviceTick(device_);
 #endif
-    return operational();
   }
 
 }  // namespace app

@@ -18,8 +18,15 @@ public:
   static uint8_t next() {
     // every time this is called, it should use the current index for the return then increment the index by 1 and wrap around to 0 if reaches the end of the array.
     // This a simple random number generator, we will use more robust random number generation later.
-    throw new std::runtime_error("SeededRandom::next() is not implemented yet.");
-    return 0;
+    // throw new std::runtime_error("SeededRandom::next() is not implemented yet.");
+
+      uint8_t rand = randomNumbers[index];
+
+      index++;
+
+      if (index >= 100) index = 0;
+
+      return rand;
   }
 
   static void setIndex(uint8_t i) { index = i; }

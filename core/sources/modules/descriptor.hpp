@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -8,6 +10,8 @@
 namespace mobagen::modules {
 
   inline constexpr std::uint32_t project_schema_version = 1;
+  inline constexpr std::size_t max_module_configuration_bytes = 1024 * 1024;
+  inline constexpr std::size_t max_module_source_url_bytes = 2048;
 
   struct SemanticVersion {
     std::uint32_t major{};
@@ -23,20 +27,36 @@ namespace mobagen::modules {
 
   enum class ReloadPolicy : std::uint8_t { Never, Restart, SafePoint };
 
+  struct ModuleConfiguration {
+    std::string schema;
+    std::string data;
+
+    friend bool operator==(const ModuleConfiguration&, const ModuleConfiguration&) = default;
+  };
+
   struct ModuleRequest {
     std::string alias;
     std::string provider;
+    std::optional<ModuleConfiguration> configuration;
+    std::string capability;
   };
 
   struct ProfileDescriptor {
     std::string name;
     LinkageMode linkage{LinkageMode::Static};
     bool editor{true};
+    std::vector<std::string> permissions;
+  };
+
+  struct ModuleSourceDescriptor {
+    std::string name;
+    std::string url;
   };
 
   struct ProductDescriptor {
     std::uint32_t schema{project_schema_version};
     std::string name;
+    std::vector<ModuleSourceDescriptor> sources;
     std::vector<ModuleRequest> modules;
     std::vector<std::string> plugins;
     std::vector<ProfileDescriptor> profiles;
@@ -61,6 +81,8 @@ namespace mobagen::modules {
     InvalidIdentifier,
     InvalidCapability,
     InvalidPluginPath,
+    InvalidSourceUrl,
+    LimitExceeded,
     DuplicateEntry,
     MissingEntry,
     SelfDependency,
@@ -75,6 +97,8 @@ namespace mobagen::modules {
   [[nodiscard]] bool is_slug(std::string_view value) noexcept;
   [[nodiscard]] bool is_provider_id(std::string_view value) noexcept;
   [[nodiscard]] bool is_capability_id(std::string_view value) noexcept;
+  [[nodiscard]] bool is_secure_https_url(std::string_view value) noexcept;
+  [[nodiscard]] bool is_secure_plugin_artifact_url(std::string_view value) noexcept;
   [[nodiscard]] std::vector<DescriptorIssue> validate(const ProductDescriptor& descriptor);
   [[nodiscard]] std::vector<DescriptorIssue> validate(const ProviderDescriptor& descriptor);
 

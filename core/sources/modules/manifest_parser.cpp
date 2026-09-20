@@ -71,8 +71,11 @@ namespace mobagen::modules {
           case DescriptorIssueCode::InvalidIdentifier:
           case DescriptorIssueCode::InvalidCapability:
           case DescriptorIssueCode::InvalidPluginPath:
+          case DescriptorIssueCode::InvalidSourceUrl:
           case DescriptorIssueCode::SelfDependency:
             return ManifestErrorCode::InvalidValue;
+          case DescriptorIssueCode::LimitExceeded:
+            return ManifestErrorCode::LimitExceeded;
         }
         return ManifestErrorCode::InvalidValue;
       }
@@ -232,16 +235,49 @@ namespace mobagen::modules {
       }
 
       void parse_root(const YAML::Node& root) {
-        const auto entries = read_map(root, {}, {"schema", "name", "modules", "plugins", "profiles"});
+        const auto entries = read_map(root, {}, {"schema", "name", "sources", "modules", "plugins", "profiles"});
         const auto* schema = require_entry(entries, "schema", {}, root.Mark());
         const auto* name = require_entry(entries, "name", {}, root.Mark());
         const auto* modules = require_entry(entries, "modules", {}, root.Mark());
 
         if (schema) read_schema(*schema);
         if (name) read_string(*name, "name", descriptor_.name);
+        if (const auto* sources = find_entry(entries, "sources")) parse_sources(*sources);
         if (modules) parse_modules(*modules);
         if (const auto* plugins = find_entry(entries, "plugins")) parse_plugins(*plugins);
         if (const auto* profiles = find_entry(entries, "profiles")) parse_profiles(*profiles);
+      }
+
+      void parse_sources(const YAML::Node& node) {
+        if (!node.IsMap()) {
+          add_error(ManifestErrorCode::WrongType, node.Mark(), "sources", "expected a mapping");
+          return;
+        }
+        if (node.size() > max_manifest_collection_entries) {
+          add_error(ManifestErrorCode::LimitExceeded, node.Mark(), "sources", "source count exceeds the 1024-entry manifest limit");
+          return;
+        }
+
+        std::set<std::string> seen;
+        for (const auto& pair : node) {
+          if (!pair.first.IsScalar()) {
+            add_error(ManifestErrorCode::WrongType, pair.first.Mark(), "sources", "source names must be strings");
+            continue;
+          }
+          const std::string name = pair.first.Scalar();
+          const std::string field = "sources." + name;
+          remember_location(field, pair.first.Mark());
+          if (!seen.insert(name).second) {
+            add_error(ManifestErrorCode::DuplicateKey, pair.first.Mark(), field, "source names must be unique");
+          }
+
+          const auto source_entries = read_map(pair.second, field, {"url"});
+          const auto* url = require_entry(source_entries, "url", field, pair.second.Mark());
+          std::string parsed_url;
+          if (url && read_string(*url, field + ".url", parsed_url)) {
+            descriptor_.sources.push_back({name, std::move(parsed_url)});
+          }
+        }
       }
 
       void parse_modules(const YAML::Node& node) {
@@ -267,11 +303,32 @@ namespace mobagen::modules {
             add_error(ManifestErrorCode::DuplicateKey, pair.first.Mark(), field, "module aliases must be unique");
           }
 
-          const auto module_entries = read_map(pair.second, field, {"use"});
+          const auto module_entries = read_map(pair.second, field, {"capability", "use", "config"});
           const auto* use = require_entry(module_entries, "use", field, pair.second.Mark());
           std::string provider;
           if (use && read_string(*use, field + ".use", provider)) {
-            descriptor_.modules.push_back({alias, std::move(provider)});
+            std::string capability;
+            if (const auto* capability_node = find_entry(module_entries, "capability")) {
+              read_string(*capability_node, field + ".capability", capability);
+            }
+            std::optional<ModuleConfiguration> configuration;
+            if (const auto* config = find_entry(module_entries, "config")) {
+              const auto config_field = field + ".config";
+              const auto config_entries = read_map(*config, config_field, {"schema", "data"});
+              const auto* schema = require_entry(config_entries, "schema", config_field, config->Mark());
+              const auto* data = require_entry(config_entries, "data", config_field, config->Mark());
+              ModuleConfiguration parsed;
+              if (schema && data && read_string(*schema, config_field + ".schema", parsed.schema)
+                  && read_string(*data, config_field + ".data", parsed.data)) {
+                configuration = std::move(parsed);
+              }
+            }
+            descriptor_.modules.push_back({
+                .alias = alias,
+                .provider = std::move(provider),
+                .configuration = std::move(configuration),
+                .capability = std::move(capability),
+            });
           }
         }
       }
@@ -290,6 +347,23 @@ namespace mobagen::modules {
           const std::string field = "plugins[" + std::to_string(index) + ']';
           if (read_string(node[index], field, path)) {
             descriptor_.plugins.push_back(std::move(path));
+          }
+        }
+      }
+
+      void parse_permissions(const YAML::Node& node, const std::string& field, std::vector<std::string>& output) {
+        if (!node.IsSequence()) {
+          add_error(ManifestErrorCode::WrongType, node.Mark(), field, "expected a sequence");
+          return;
+        }
+        if (node.size() > max_manifest_collection_entries) {
+          add_error(ManifestErrorCode::LimitExceeded, node.Mark(), field, "permission count exceeds the 1024-entry manifest limit");
+          return;
+        }
+        for (std::size_t index = 0; index < node.size(); ++index) {
+          std::string permission;
+          if (read_string(node[index], field + '[' + std::to_string(index) + ']', permission)) {
+            output.push_back(std::move(permission));
           }
         }
       }
@@ -317,12 +391,15 @@ namespace mobagen::modules {
             add_error(ManifestErrorCode::DuplicateKey, pair.first.Mark(), field, "profile names must be unique");
           }
 
-          const auto profile_entries = read_map(pair.second, field, {"linkage", "editor"});
+          const auto profile_entries = read_map(pair.second, field, {"linkage", "editor", "permissions"});
           const auto* linkage = require_entry(profile_entries, "linkage", field, pair.second.Mark());
           ProfileDescriptor profile{.name = name};
           if (linkage) read_linkage(*linkage, field + ".linkage", profile.linkage);
           if (const auto* editor = find_entry(profile_entries, "editor")) {
             read_bool(*editor, field + ".editor", profile.editor);
+          }
+          if (const auto* permissions = find_entry(profile_entries, "permissions")) {
+            parse_permissions(*permissions, field + ".permissions", profile.permissions);
           }
           descriptor_.profiles.push_back(std::move(profile));
         }

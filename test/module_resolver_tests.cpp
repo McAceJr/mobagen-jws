@@ -141,6 +141,41 @@ TEST_CASE("Module resolver: an explicit provider overrides the profile default")
   CHECK(selection->reason == "explicit provider for module 'render'");
 }
 
+TEST_CASE("Module resolver: manifest capability removes the need for an injected alias") {
+  using namespace mobagen::modules;
+
+  const auto registry = make_resolver_registry(false);
+  auto product = resolver_product("mobagen.render.webgpu");
+  product.modules.front().capability = "render.backend.v1";
+  auto options = resolver_options();
+  options.aliases.clear();
+
+  const auto result = resolve_modules(product, registry, options);
+
+  REQUIRE(result.ok());
+  const auto capability = registry.find_capability("render.backend.v1");
+  REQUIRE(capability.has_value());
+  const auto* selection = result.resolution->selection_for(*capability);
+  REQUIRE(selection != nullptr);
+  REQUIRE(registry.provider(selection->provider) != nullptr);
+  CHECK(registry.provider(selection->provider)->id == "mobagen.render.webgpu");
+}
+
+TEST_CASE("Module resolver: injected aliases cannot contradict manifest capabilities") {
+  using namespace mobagen::modules;
+
+  const auto registry = make_resolver_registry(false);
+  auto product = resolver_product("mobagen.render.webgpu");
+  product.modules.front().capability = "render.backend.v1";
+  auto options = resolver_options();
+  options.aliases.front().capability = "render.post.v1";
+
+  const auto result = resolve_modules(product, registry, options);
+
+  CHECK_FALSE(result.ok());
+  CHECK(has_resolution_issue(result, ResolutionIssueCode::AliasMismatch));
+}
+
 TEST_CASE("Module resolver: required capabilities produce a stable dependency order") {
   using namespace mobagen::modules;
 
@@ -253,6 +288,101 @@ TEST_CASE("Module resolver: conflicts and dependency cycles reject the staged gr
     CHECK_FALSE(result.ok());
     CHECK_FALSE(result.resolution.has_value());
     CHECK(has_resolution_issue(result, ResolutionIssueCode::DependencyCycle));
+  }
+}
+
+TEST_CASE("Module resolver: selected providers require explicit profile permissions") {
+  using namespace mobagen::modules;
+
+  auto renderer = resolver_provider("mobagen.render.webgpu", {"render.backend.v1"});
+  renderer.permissions = {"filesystem-read", "gpu"};
+  const auto registry = build_resolver_registry({renderer});
+
+  SUBCASE("all requested permissions are granted") {
+    auto product = resolver_product("default");
+    product.profiles.front().permissions = {"gpu", "filesystem-read"};
+
+    const auto result = resolve_modules(product, registry, resolver_options());
+
+    REQUIRE(result.ok());
+  }
+
+  SUBCASE("a missing grant rejects resolution") {
+    auto product = resolver_product("default");
+    product.profiles.front().permissions = {"gpu"};
+
+    const auto result = resolve_modules(product, registry, resolver_options());
+
+    CHECK_FALSE(result.ok());
+    CHECK_FALSE(result.resolution.has_value());
+    CHECK(has_resolution_issue(result, ResolutionIssueCode::PermissionDenied));
+    REQUIRE(result.issues.size() == 1);
+    CHECK(result.issues.front().provider_id == "mobagen.render.webgpu");
+    CHECK(result.issues.front().message.contains("filesystem-read"));
+    CHECK(result.issues.front().message.contains("release"));
+  }
+}
+
+TEST_CASE("Module resolver: configuration schema is checked before bytes enter the lifecycle") {
+  using namespace mobagen::modules;
+
+  auto renderer = resolver_provider("mobagen.render.webgpu", {"render.backend.v1"});
+  renderer.configuration_schema = "mobagen.render.config.v1";
+  const auto registry = build_resolver_registry({renderer});
+
+  SUBCASE("matching schema freezes provider configuration") {
+    auto product = resolver_product("default");
+    product.modules.front().configuration = ModuleConfiguration{"mobagen.render.config.v1", "sample-count: 4"};
+
+    const auto result = resolve_modules(product, registry, resolver_options());
+
+    REQUIRE(result.ok());
+    const auto provider = registry.find_provider("mobagen.render.webgpu");
+    REQUIRE(provider.has_value());
+    const auto* configuration = result.resolution->configuration_for(*provider);
+    REQUIRE(configuration != nullptr);
+    CHECK(configuration->schema == "mobagen.render.config.v1");
+    CHECK(configuration->data == "sample-count: 4");
+  }
+
+  SUBCASE("mismatched schema is rejected") {
+    auto product = resolver_product("default");
+    product.modules.front().configuration = ModuleConfiguration{"customer.render.config.v1", "sample-count: 4"};
+
+    const auto result = resolve_modules(product, registry, resolver_options());
+
+    CHECK_FALSE(result.ok());
+    CHECK(has_resolution_issue(result, ResolutionIssueCode::ConfigurationSchemaMismatch));
+  }
+
+  SUBCASE("configuration is rejected when the provider declares no schema") {
+    auto no_schema = renderer;
+    no_schema.configuration_schema.clear();
+    const auto no_schema_registry = build_resolver_registry({no_schema});
+    auto product = resolver_product("default");
+    product.modules.front().configuration = ModuleConfiguration{"mobagen.render.config.v1", "sample-count: 4"};
+
+    const auto result = resolve_modules(product, no_schema_registry, resolver_options());
+
+    CHECK_FALSE(result.ok());
+    CHECK(has_resolution_issue(result, ResolutionIssueCode::UnexpectedConfiguration));
+  }
+
+  SUBCASE("one provider cannot receive conflicting configurations through two aliases") {
+    auto multi = renderer;
+    multi.provides.push_back("render.post.v1");
+    const auto multi_registry = build_resolver_registry({multi});
+    auto product = resolver_product("mobagen.render.webgpu");
+    product.modules.front().configuration = ModuleConfiguration{"mobagen.render.config.v1", "sample-count: 4"};
+    product.modules.push_back(
+        {.alias = "post", .provider = "mobagen.render.webgpu", .configuration = ModuleConfiguration{"mobagen.render.config.v1", "sample-count: 8"}});
+    auto options = resolver_options();
+    options.aliases.push_back({.alias = "post", .capability = "render.post.v1"});
+
+    const auto result = resolve_modules(product, multi_registry, options);
+
+    CHECK_FALSE(result.ok());
+    CHECK(has_resolution_issue(result, ResolutionIssueCode::ConflictingConfiguration));
   }
 }
 

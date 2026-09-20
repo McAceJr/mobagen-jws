@@ -59,6 +59,7 @@ namespace mobagen::modules {
       std::set<std::uint32_t> pending_providers;
       std::set<std::uint32_t> processed_providers;
       std::vector<ProviderDependency> dependencies;
+      std::map<std::uint32_t, ResolvedProviderConfiguration> configurations;
 
       bool compatible(ProviderIndex provider_index, std::string_view module_alias, std::string_view capability) {
         const auto* provider = registry.provider(provider_index);
@@ -80,7 +81,8 @@ namespace mobagen::modules {
         return true;
       }
 
-      bool select(ProviderIndex provider_index, CapabilityIndex requested_capability, std::string reason, std::string_view module_alias) {
+      bool select(ProviderIndex provider_index, CapabilityIndex requested_capability, std::string reason, std::string_view module_alias,
+                  const ModuleConfiguration* configuration = nullptr) {
         const auto* provider = registry.provider(provider_index);
         const auto capability = registry.capability_name(requested_capability);
         if (provider == nullptr) {
@@ -94,6 +96,26 @@ namespace mobagen::modules {
           return false;
         }
         if (!compatible(provider_index, module_alias, capability)) return false;
+
+        if (configuration != nullptr) {
+          if (provider->configuration_schema.empty()) {
+            add_issue(result, ResolutionIssueCode::UnexpectedConfiguration, std::string(module_alias), std::string(capability), provider->id,
+                      "selected provider does not declare a configuration schema");
+            return false;
+          }
+          if (provider->configuration_schema != configuration->schema) {
+            add_issue(result, ResolutionIssueCode::ConfigurationSchemaMismatch, std::string(module_alias), std::string(capability), provider->id,
+                      "module configuration schema does not match selected provider schema '" + provider->configuration_schema + "'");
+            return false;
+          }
+          const ResolvedProviderConfiguration resolved{provider_index, configuration->schema, configuration->data};
+          const auto [existing, inserted] = configurations.emplace(provider_index.value, resolved);
+          if (!inserted && (existing->second.schema != resolved.schema || existing->second.data != resolved.data)) {
+            add_issue(result, ResolutionIssueCode::ConflictingConfiguration, std::string(module_alias), std::string(capability), provider->id,
+                      "selected provider received conflicting module configurations");
+            return false;
+          }
+        }
 
         std::vector<std::string> provided_capabilities = provider->provides;
         std::ranges::sort(provided_capabilities);
@@ -213,6 +235,22 @@ namespace mobagen::modules {
         }
       }
 
+      void validate_permissions() {
+        auto granted = profile.permissions;
+        std::ranges::sort(granted);
+        for (const auto provider_value : selected_providers) {
+          const auto* provider = registry.provider(ProviderIndex{provider_value});
+          if (provider == nullptr) continue;
+          auto requested = provider->permissions;
+          std::ranges::sort(requested);
+          for (const auto& permission : requested) {
+            if (std::ranges::binary_search(granted, permission)) continue;
+            add_issue(result, ResolutionIssueCode::PermissionDenied, {}, {}, provider->id,
+                      "selected provider requires permission '" + permission + "' not granted by profile '" + profile.name + "'");
+          }
+        }
+      }
+
       std::vector<ProviderIndex> topological_order() {
         std::map<std::uint32_t, std::set<std::uint32_t>> dependents;
         std::map<std::uint32_t, std::size_t> indegree;
@@ -250,9 +288,11 @@ namespace mobagen::modules {
   struct ModuleResolutionBuilder {
     ModuleResolution resolution;
 
+    explicit ModuleResolutionBuilder(RegistryGeneration generation) { resolution.registry_generation_ = generation; }
     void add_selection(ResolvedCapability selection) { resolution.selections_.push_back(std::move(selection)); }
     void add_dependency(ProviderDependency dependency) { resolution.dependencies_.push_back(dependency); }
     void add_provider(ProviderIndex provider) { resolution.lifecycle_order_.push_back(provider); }
+    void add_configuration(ResolvedProviderConfiguration configuration) { resolution.configurations_.push_back(std::move(configuration)); }
   };
 
   const ResolvedCapability* ModuleResolution::selection_for(CapabilityIndex capability) const noexcept {
@@ -267,6 +307,14 @@ namespace mobagen::modules {
   std::span<const ProviderDependency> ModuleResolution::dependencies() const noexcept { return dependencies_; }
 
   std::span<const ProviderIndex> ModuleResolution::lifecycle_order() const noexcept { return lifecycle_order_; }
+
+  const ResolvedProviderConfiguration* ModuleResolution::configuration_for(ProviderIndex provider) const noexcept {
+    const auto found = std::ranges::lower_bound(configurations_, provider.value, {},
+                                                [](const ResolvedProviderConfiguration& configuration) { return configuration.provider.value; });
+    return found == configurations_.end() || found->provider != provider ? nullptr : &*found;
+  }
+
+  std::span<const ResolvedProviderConfiguration> ModuleResolution::configurations() const noexcept { return configurations_; }
 
   ResolutionResult resolve_modules(const ProductDescriptor& product, const CapabilityRegistry& registry, const ResolverOptions& options) {
     ResolutionResult result;
@@ -313,14 +361,21 @@ namespace mobagen::modules {
     std::ranges::sort(requests, {}, &ModuleRequest::alias);
     for (const auto& request : requests) {
       const auto* alias = find_alias(aliases, request.alias);
-      if (alias == nullptr) {
+      if (!request.capability.empty() && alias != nullptr && alias->capability != request.capability) {
+        add_issue(result, ResolutionIssueCode::AliasMismatch, request.alias, request.capability, {},
+                  "injected module alias contradicts the manifest capability");
+        continue;
+      }
+      const std::string_view capability_id = request.capability.empty() ? alias == nullptr ? std::string_view{} : std::string_view{alias->capability}
+                                                                        : std::string_view{request.capability};
+      if (capability_id.empty()) {
         add_issue(result, ResolutionIssueCode::UnknownAlias, request.alias, {}, {}, "module alias has no capability binding");
         continue;
       }
 
-      const auto capability = registry.find_capability(alias->capability);
+      const auto capability = registry.find_capability(capability_id);
       if (!capability.has_value()) {
-        add_issue(result, ResolutionIssueCode::MissingCapability, request.alias, alias->capability, {},
+        add_issue(result, ResolutionIssueCode::MissingCapability, request.alias, std::string{capability_id}, {},
                   "no provider exposes the requested capability");
         continue;
       }
@@ -328,9 +383,9 @@ namespace mobagen::modules {
       std::string provider_id = request.provider;
       std::string reason = "explicit provider for module '" + request.alias + "'";
       if (request.provider == "default") {
-        const auto* default_provider = find_default(defaults, options.target, options.profile, alias->capability);
+        const auto* default_provider = find_default(defaults, options.target, options.profile, capability_id);
         if (default_provider == nullptr) {
-          add_issue(result, ResolutionIssueCode::MissingDefault, request.alias, alias->capability, {},
+          add_issue(result, ResolutionIssueCode::MissingDefault, request.alias, std::string{capability_id}, {},
                     "no default provider is declared for the active target and profile");
           continue;
         }
@@ -339,11 +394,16 @@ namespace mobagen::modules {
       }
 
       const auto provider = staged.named_provider(provider_id, *capability, request.alias);
-      if (provider.has_value()) staged.select(*provider, *capability, std::move(reason), request.alias);
+      if (provider.has_value()) {
+        staged.select(*provider, *capability, std::move(reason), request.alias,
+                      request.configuration.has_value() ? &*request.configuration : nullptr);
+      }
     }
     if (!result.issues.empty()) return result;
 
     staged.expand_dependencies();
+    if (!result.issues.empty()) return result;
+    staged.validate_permissions();
     if (!result.issues.empty()) return result;
     staged.validate_conflicts();
     if (!result.issues.empty()) return result;
@@ -356,10 +416,11 @@ namespace mobagen::modules {
     });
     staged.dependencies.erase(std::ranges::unique(staged.dependencies).begin(), staged.dependencies.end());
 
-    ModuleResolutionBuilder builder;
+    ModuleResolutionBuilder builder{registry.generation()};
     for (auto& [_, selection] : staged.selections) builder.add_selection(std::move(selection));
     for (const auto dependency : staged.dependencies) builder.add_dependency(dependency);
     for (const auto provider : lifecycle_order) builder.add_provider(provider);
+    for (auto& [_, configuration] : staged.configurations) builder.add_configuration(std::move(configuration));
     result.resolution = std::move(builder.resolution);
     return result;
   }

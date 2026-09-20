@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -13,11 +14,13 @@
 namespace mobagen::modules {
 
   inline constexpr std::uint32_t lockfile_schema_version = 1;
+  inline constexpr std::size_t max_lockfile_bytes = 1024 * 1024;
 
   struct PluginLockEntry {
     std::string provider;
     SemanticVersion version;
     std::uint32_t abi_version{};
+    std::string package;
     std::string hash;
   };
 
@@ -26,6 +29,7 @@ namespace mobagen::modules {
     SemanticVersion sdk;
     TargetPlatform target{};
     std::string profile;
+    std::string manifest_hash;
     std::vector<PluginLockEntry> plugins;
   };
 
@@ -52,6 +56,89 @@ namespace mobagen::modules {
 
   [[nodiscard]] LockfileSerializeResult serialize_lockfile(const CapabilityRegistry& registry, const ModuleResolution& resolution,
                                                            const LockfileMetadata& metadata);
+
+  struct LockedConfiguration {
+    std::string provider;
+    std::string schema;
+    std::string hash;
+  };
+
+  struct LockedProviderSelection {
+    std::string capability;
+    std::string provider;
+    SemanticVersion version;
+    LinkageMode linkage{};
+  };
+
+  struct LockedDependency {
+    std::string capability;
+    std::string provider;
+    std::string required_by;
+  };
+
+  struct LockfileDocument {
+    LockfileMetadata metadata;
+    std::vector<std::string> permissions;
+    std::vector<LockedConfiguration> configurations;
+    std::vector<LockedProviderSelection> resolved;
+    std::vector<LockedDependency> dependencies;
+  };
+
+  enum class LockfileParseIssueCode : std::uint8_t {
+    Syntax,
+    DuplicateKey,
+    UnsupportedTag,
+    UnknownField,
+    MissingField,
+    WrongType,
+    UnsupportedSchema,
+    InvalidValue,
+    InvalidHash,
+    LimitExceeded,
+    DuplicateEntry,
+  };
+
+  struct LockfileParseIssue {
+    LockfileParseIssueCode code{};
+    std::string source_path;
+    std::size_t line{};
+    std::size_t column{};
+    std::string field;
+    std::string message;
+  };
+
+  struct LockfileParseResult {
+    std::optional<LockfileDocument> document;
+    std::vector<LockfileParseIssue> issues;
+
+    [[nodiscard]] bool ok() const noexcept { return document.has_value() && issues.empty(); }
+  };
+
+  [[nodiscard]] LockfileParseResult parse_lockfile(std::string_view source, std::string_view source_path = "mobagen.lock");
+
+  enum class LockfileReadIssueCode : std::uint8_t {
+    InvalidPath,
+    NotFound,
+    TooLarge,
+    ReadFailed,
+    Changed,
+  };
+
+  struct LockfileReadIssue {
+    LockfileReadIssueCode code{};
+    std::filesystem::path path;
+    std::error_code system_error;
+    std::string message;
+  };
+
+  struct LockfileReadResult {
+    std::optional<std::string> contents;
+    std::optional<LockfileReadIssue> issue;
+
+    [[nodiscard]] bool ok() const noexcept { return contents.has_value() && !issue.has_value(); }
+  };
+
+  [[nodiscard]] LockfileReadResult read_lockfile_bounded(const std::filesystem::path& source);
 
   enum class LockfileWriteIssueCode : std::uint8_t {
     InvalidPath,

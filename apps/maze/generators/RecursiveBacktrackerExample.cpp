@@ -26,20 +26,13 @@ void RecursiveBacktrackerExample::Clear(World* w) {
   // begin solution
 
 	stack.clear();
-	
-	for (auto vis : visited)
-	{
-          vis.second.clear();
-	}
 
 	visited.clear();
 
-	Point2D size = w->ToFormalCoords({w->GetWidth() - 1, w->GetHeight() - 1});
-
-	for (int x = -size.x; x < size.x; x++)
+	for (int x = 0; x < w->GetWidth(); x++)
 	{
 		std::map<int, bool> vis;
-		for (int y = -size.y; y < size.y; y++)
+		for (int y = 0; y < w->GetHeight(); y++)
 		{
 			vis.insert({y, false});
 		}
@@ -88,7 +81,7 @@ bool RecursiveBacktrackerExample::Step(World* w) {
 	if (neighbors.empty())
 	{
           stack.pop_back();
-          nodeCol = Color32(0.5f, 0.f, 0.0f, 1.f);
+          nodeCol = Color32(0.0f, 0.f, 0.0f, 1.f);
           deadEnd = true;
 	}
 	else if (neighbors.size() == 1)
@@ -102,22 +95,23 @@ bool RecursiveBacktrackerExample::Step(World* w) {
           nodeCol = Color32(0.f, 0.5f, 0.f, 1.f);
 	}
 
-	if (stack.empty()) return false;
-
 	Point2D wp = w->ToWorldCoords(p);
 
 	w->SetNodeColor(wp, nodeCol);
-	if (!deadEnd)
-	{
-        if ((p.y < stack.back().y))
-			w->SetNorth(wp, false);
-        else if ((p.x < stack.back().x))
-			w->SetEast(wp, false);
-        else if ((p.y > stack.back().y))
-			w->SetSouth(wp, false);
-        else if ((p.x > stack.back().x))
-			w->SetWest(wp, false);
-	}
+	
+	if (stack.empty()) return false;
+
+	Point2D dir = stack.back() - p;
+
+	if (dir.x == 0 && dir.y == -1) // North
+          w->SetNorth(wp, false);
+	if (dir.x == 1 && dir.y == 0)  // East
+          w->SetEast(wp, false);
+	if (dir.x == 0 && dir.y == 1) // South
+          w->SetSouth(wp, false);
+	if (dir.x == -1 && dir.y == 0)  // West
+          w->SetWest(wp, false);
+
 
   // end solution
   return true;
@@ -131,30 +125,25 @@ std::vector<Point2D> RecursiveBacktrackerExample::getVisitables(World* w, const 
   //   (0 <= x < w->GetWidth(), 0 <= y < w->GetHeight()) and not visited
   // begin solution
 
-	Point2D worldPoint = w->ToWorldCoords(formalPoint);
 	std::vector<Point2D> dir;
 	std::vector<Point2D> neighbors = {};
 
-	if (0 <= formalPoint.x < w->GetWidth() && 0 <= formalPoint.y < w->GetHeight())
+    int x = formalPoint.x;
+    int y = formalPoint.y;
+
+	if (0 <= y - 1) dir.push_back({x, y - 1}); // North
+	if (x + 1 < w->GetWidth()) dir.push_back({x + 1, y}); // East
+	if (y + 1 < w->GetHeight()) dir.push_back({x, y + 1}); // South
+	if (0 <= x - 1) dir.push_back({x - 1, y}); // West
+
+	if (dir.empty()) return {};
+
+	for (auto d : dir)
 	{
-          int x = formalPoint.x;
-          int y = formalPoint.y;
-
-		  if (0 <= y - 1) dir.push_back({x, y - 1});
-		  if (x + 1 < w->GetWidth()) dir.push_back({x + 1, y});
-		  if (y + 1 < w->GetHeight()) dir.push_back({x, y + 1});
-		  if (0 <= x - 1) dir.push_back({x - 1, y});
-
-		  if (dir.empty()) return {};
-
-		  for (auto d : dir)
-		  {
-			  if (!visited[d.x][d.y])
-			  {
-				  neighbors.push_back(d);
-			  }
-		  }
-
+		if (!visited[d.x][d.y])
+		{
+			neighbors.push_back(d);
+		}
 	}
 
   // end solution

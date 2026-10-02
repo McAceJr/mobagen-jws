@@ -28,6 +28,16 @@ std::vector<Point2D> Agent::generatePath(CatWorld* w) {
     // for every neighbor set the cameFrom
     // enqueue the neighbors to frontier and frontierset
     // do this up to find a visitable border and break the loop
+    
+    auto cur = frontier.front();
+
+    auto it = frontierSet.find(cur);
+    if (it != frontierSet.end())
+    {
+      frontierSet.erase(it);
+    }
+    visited[cur] = true;
+
   }
 
   // if the border is not infinity, build the path from border to the cat using the camefrom map

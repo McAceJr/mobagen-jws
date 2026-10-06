@@ -12,12 +12,14 @@ std::vector<Point2D> Agent::generatePath(CatWorld* w) {
   queue<Point2D> frontier;                   // to store next ones to visit
   unordered_set<Point2D> frontierSet;        // OPTIMIZATION to check faster if a point is in the queue
   unordered_map<Point2D, bool> visited;      // use .at() to get data, if the element dont exist [] will give you wrong results
+  unordered_map<Point2D, int> exitPoints;
 
   // bootstrap state
   auto catPos = w->getCat();
   frontier.push(catPos);
   frontierSet.insert(catPos);
   Point2D borderExit = {INT32_MAX, INT32_MAX};  // sentinel: no border found yet
+  int exitDist = 0;
 
   while (!frontier.empty()) {
     // get the current from frontier
@@ -28,20 +30,111 @@ std::vector<Point2D> Agent::generatePath(CatWorld* w) {
     // for every neighbor set the cameFrom
     // enqueue the neighbors to frontier and frontierset
     // do this up to find a visitable border and break the loop
-    
-    auto cur = frontier.front();
+
+    Point2D cur = frontier.front();
+    frontier.pop();
 
     auto it = frontierSet.find(cur);
     if (it != frontierSet.end())
     {
-      frontierSet.erase(it);
+        frontierSet.erase(it);
     }
     visited[cur] = true;
+
+    auto neighbors = getVisitableNeighbors(w, cur, frontierSet, visited);
+    for (auto v : neighbors)
+    {
+        cameFrom[v] = cur;
+        frontier.emplace(v);
+        frontierSet.emplace(v);
+    }
+
+    if (w->catWinsOnSpace(cur))
+    {
+        int dist = 0;
+        Point2D cursor = cur;
+        while (cursor != catPos)
+        {
+            cursor = cameFrom[cursor];
+            dist++;
+        }
+        exitPoints.insert({cur, dist});
+        if (getNumVisNeighbors(w, cur) > 2)
+        {
+            exitDist = dist;
+            borderExit = cur;
+            break;
+        }
+    }
 
   }
 
   // if the border is not infinity, build the path from border to the cat using the camefrom map
   // if there isnt a reachable border, just return empty vector
-  // if your vector is filled from the border to the cat, the first element is the catcher move, and the last element is the cat move
-  return vector<Point2D>();
+  // if your vector is filled from the border to the cat, the first element is the catcher move,
+  // and the last element is the cat move
+
+  vector<Point2D> path;
+  Point2D altExit = {};
+
+  if (!w->isValidPosition(borderExit) || exitPoints.empty()) return path;
+
+  Point2D cur = borderExit;
+
+  while (cur != catPos)
+  {
+      path.push_back(cur);
+      cur = cameFrom[cur];
+  }
+  
+  return path;
+}
+
+std::vector<Point2D> Agent::getVisitableNeighbors(CatWorld* w, Point2D cur, std::unordered_set<Point2D> fSet, std::unordered_map<Point2D, bool> visited)
+{ 
+    vector<Point2D> directions;
+    vector<Point2D> neighbors;
+
+    directions.push_back(w->SE(cur));
+    directions.push_back(w->SW(cur));
+    directions.push_back(w->W(cur));
+    directions.push_back(w->NW(cur));
+    directions.push_back(w->NE(cur));
+    directions.push_back(w->E(cur));
+
+    for (auto v : directions)
+    {
+        if ( w->isValidPosition(v) && 
+            !w->getContent(v)      && 
+            !visited[v]            && 
+            !fSet.contains(v)      && 
+            w->getCat() != v         )
+        {
+            neighbors.push_back(v);
+        }
+    }
+
+    return neighbors;
+}
+
+int Agent::getNumVisNeighbors(CatWorld* w, Point2D cur) {
+  vector<Point2D> directions;
+  int neighbors = 0;
+
+  directions.push_back(w->SE(cur));
+  directions.push_back(w->SW(cur));
+  directions.push_back(w->W(cur));
+  directions.push_back(w->NW(cur));
+  directions.push_back(w->NE(cur));
+  directions.push_back(w->E(cur));
+
+  for (auto v : directions)
+  {
+      if (w->isValidPosition(v) && !w->getContent(v))
+      {
+          neighbors++;
+      }
+  }
+
+  return neighbors;
 }

@@ -3,10 +3,34 @@
 
 Point2D Catcher::Move(CatWorld* world) {
 	Point2D next = {};
-	std::vector<Point2D> path = Agent::generatePath(world);
-	if (!path.empty()) next = path[0];
+	std::vector<Point2D> path = Agent::generateFilledPath(world);
+	int size = world->getWorldSideSize() / 2;
+
+	if (size > 5) // remove corners first if the grid is large enough
+	{
+        if (!world->getContent({size, size}))
+			return {size, size};
+        else if (!world->getContent({size, -size}))
+			return {size, -size};
+        else if (!world->getContent({-size + 1, -size}))
+			return {-size + 1, -size};
+        else if (!world->getContent({-size + 1, size}))
+			return {-size + 1, size};
+	}
 	
+	Point2D cat = world->getCat();
+	// check if cat is close to border and change strat to just block every border
 	
+
+	if (!path.empty())
+	{
+		int index = 0;
+		if (path.size() > size / 5)
+		{
+			index = path.size() - size / 10;
+		}
+		next = path[index];
+	}
 	
 	return next;
 }

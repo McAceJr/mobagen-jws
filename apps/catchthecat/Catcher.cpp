@@ -17,15 +17,11 @@ Point2D Catcher::Move(CatWorld* world) {
         else if (!world->getContent({-size + 1, size}))
 			return {-size + 1, size};
 	}
-	
-	Point2D cat = world->getCat();
-	// check if cat is close to border and change strat to just block every border
-	
 
 	if (!path.empty())
 	{
 		int index = 0;
-		if (path.size() > size / 5)
+		if (path.size() > 3)
 		{
 			index = path.size() - size / 10;
 		}

@@ -41,6 +41,7 @@ public:
 
   std::vector<Point2D> getVisitableNeighbors(CatWorld* w, Point2D cur, std::unordered_set<Point2D> fSet, std::unordered_map<Point2D, bool> visited);
   int getNumVisNeighbors(CatWorld* w, Point2D cur);
+  std::pair<int, Point2D> MakeHeuristic(CatWorld* w, Point2D p);
 
 };
 

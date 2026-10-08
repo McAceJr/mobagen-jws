@@ -9,14 +9,17 @@ using namespace std;
 
 std::vector<Point2D> Agent::generatePath(CatWorld* w) {
   unordered_map<Point2D, Point2D> cameFrom;  // to build the flowfield and build the path
-  queue<Point2D> frontier;                   // to store next ones to visit
+  priority_queue<
+  pair<float, Point2D>,
+  vector<std::pair<float, Point2D>>,
+  greater<std::pair<float, Point2D>>> frontier;                   // to store next ones to visit
   unordered_set<Point2D> frontierSet;        // OPTIMIZATION to check faster if a point is in the queue
   unordered_map<Point2D, bool> visited;      // use .at() to get data, if the element dont exist [] will give you wrong results
   unordered_map<Point2D, int> exitPoints;
 
   // bootstrap state
   auto catPos = w->getCat();
-  frontier.push(catPos);
+  frontier.push(MakeHeuristic(w, catPos));
   frontierSet.insert(catPos);
   Point2D borderExit = {INT32_MAX, INT32_MAX};  // sentinel: no border found yet
   int exitDist = 0;
@@ -31,38 +34,38 @@ std::vector<Point2D> Agent::generatePath(CatWorld* w) {
     // enqueue the neighbors to frontier and frontierset
     // do this up to find a visitable border and break the loop
 
-    Point2D cur = frontier.front();
+    pair<int, Point2D> cur = frontier.top();
     frontier.pop();
 
-    auto it = frontierSet.find(cur);
+    auto it = frontierSet.find(cur.second);
     if (it != frontierSet.end())
     {
         frontierSet.erase(it);
     }
-    visited[cur] = true;
+    visited[cur.second] = true;
 
-    auto neighbors = getVisitableNeighbors(w, cur, frontierSet, visited);
+    auto neighbors = getVisitableNeighbors(w, cur.second, frontierSet, visited);
     for (auto v : neighbors)
     {
-        cameFrom[v] = cur;
-        frontier.emplace(v);
+        cameFrom[v] = cur.second;
+        frontier.push(MakeHeuristic(w, v));
         frontierSet.emplace(v);
     }
 
-    if (w->catWinsOnSpace(cur))
+    if (w->catWinsOnSpace(cur.second))
     {
         int dist = 0;
-        Point2D cursor = cur;
+        Point2D cursor = cur.second;
         while (cursor != catPos)
         {
             cursor = cameFrom[cursor];
             dist++;
         }
-        exitPoints.insert({cur, dist});
-        if (getNumVisNeighbors(w, cur) > 2)
+        exitPoints.insert({cur.second, dist});
+        if (getNumVisNeighbors(w, cur.second) > 2)
         {
             exitDist = dist;
-            borderExit = cur;
+            borderExit = cur.second;
             break;
         }
     }
@@ -217,4 +220,13 @@ int Agent::getNumVisNeighbors(CatWorld* w, Point2D cur) {
   }
 
   return neighbors;
+}
+
+std::pair<int, Point2D> Agent::MakeHeuristic(CatWorld *w, Point2D p)
+{
+    float size = w->getWorldSideSize() / 2;
+    int dist = min((int)(size - abs(p.x)), (int)(size - abs(p.y)));
+
+    return {dist, p};
+
 }

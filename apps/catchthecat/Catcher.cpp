@@ -21,7 +21,7 @@ Point2D Catcher::Move(CatWorld* world) {
 	if (!path.empty())
 	{
 		int index = 0;
-		if (path.size() > 3)
+		if (path.size() > 6)
 		{
 			index = path.size() - size / 10;
 		}

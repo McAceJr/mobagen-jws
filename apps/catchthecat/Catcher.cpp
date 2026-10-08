@@ -28,5 +28,7 @@ Point2D Catcher::Move(CatWorld* world) {
 		next = path[index];
 	}
 	
+	world->lastMove = next;
+
 	return next;
 }

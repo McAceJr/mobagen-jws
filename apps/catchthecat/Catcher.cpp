@@ -28,7 +28,7 @@ Point2D Catcher::Move(CatWorld* world) {
 		}
 		else if (!world->getContent({ -size + 1, size }))
 		{
-			next = {-size + 1, -size};
+			next = {-size + 1, size};
 			world->lastMove = next;
 			return next;
 		}
